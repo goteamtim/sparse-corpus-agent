@@ -1,18 +1,21 @@
-"""File reading and listing tools."""
+"""File reading, listing, and search tools."""
 
 from __future__ import annotations
 
+import json
 import logging
+import shutil
+import subprocess
 from pathlib import Path
 
-from sca.runtime.sandbox import safe_resolve_path
+from sca.runtime.sandbox import safe_resolve_path, validate_path
 
 logger = logging.getLogger(__name__)
 
 
 def open_snippet(
     path: str,
-    repo_root: Path,
+    workspace_root: Path,
     start_line: int = 1,
     end_line: int | None = None,
 ) -> str:
@@ -22,15 +25,15 @@ def open_snippet(
     Evidence-first principle: All file references must cite line ranges.
     
     Args:
-        path: File path (relative to repo root or absolute)
-        repo_root: Repository root for sandboxing
+        path: File path (relative to workspace root or absolute)
+        workspace_root: Workspace root for sandboxing
         start_line: First line to read (1-indexed, inclusive)
         end_line: Last line to read (1-indexed, inclusive). If None, read to EOF
     
     Returns:
         File content for specified line range, or empty string on error
     """
-    resolved = safe_resolve_path(path, repo_root, must_exist=True)
+    resolved = safe_resolve_path(path, workspace_root, must_exist=True)
     
     if not resolved:
         logger.error(f"Cannot read snippet: invalid path {path}")
@@ -60,7 +63,7 @@ def open_snippet(
         snippet = "".join(snippet_lines)
         
         logger.info(
-            f"Read {resolved.relative_to(repo_root)} "
+            f"Read {resolved.relative_to(workspace_root)} "
             f"[L{start_line}-L{end_line}] ({len(snippet)} chars)"
         )
         
@@ -74,24 +77,24 @@ def open_snippet(
         return ""
 
 
-def file_stats(path: str, repo_root: Path) -> dict:
+def file_stats(path: str, workspace_root: Path) -> dict:
     """
     Get basic file statistics without reading content.
     
     Args:
-        path: File path (relative to repo root or absolute)
-        repo_root: Repository root for sandboxing
+        path: File path (relative to workspace root or absolute)
+        workspace_root: Workspace root for sandboxing
     
     Returns:
         Dictionary with size, line_count, exists, is_binary, error fields
     """
-    resolved = safe_resolve_path(path, repo_root, must_exist=False)
+    resolved = safe_resolve_path(path, workspace_root, must_exist=False)
     
     if not resolved or not resolved.exists():
         return {
             "exists": False,
             "path": path,
-            "error": "Path not found or outside repo",
+            "error": "Path not found or outside workspace",
         }
     
     try:
@@ -116,7 +119,7 @@ def file_stats(path: str, repo_root: Path) -> dict:
         
         return {
             "exists": True,
-            "path": str(resolved.relative_to(repo_root)),
+            "path": str(resolved.relative_to(workspace_root)),
             "size_bytes": stat.st_size,
             "line_count": line_count,
             "is_binary": is_binary,
@@ -131,3 +134,206 @@ def file_stats(path: str, repo_root: Path) -> dict:
             "path": path,
             "error": str(e),
         }
+
+
+def list_files(
+    workspace_root: Path,
+    globs: list[str] | None = None,
+    ignore: list[str] | None = None,
+    max_files: int = 500,
+    include_hidden: bool = False,
+) -> list[dict]:
+    """
+    List files in the workspace matching glob patterns.
+
+    Args:
+        workspace_root: Workspace root for sandboxing
+        globs: Glob patterns to include (e.g. ["**/*.py"]). Defaults to ["**/*"]
+        ignore: Glob patterns to exclude (e.g. ["**/node_modules/**"])
+        max_files: Maximum number of files to return
+        include_hidden: Whether to include hidden files/directories
+
+    Returns:
+        List of dicts with path, size_bytes, is_dir keys
+    """
+    if globs is None:
+        globs = ["**/*"]
+    if ignore is None:
+        ignore = []
+
+    results: list[dict] = []
+    seen: set[Path] = set()
+
+    for pattern in globs:
+        for match in sorted(workspace_root.glob(pattern)):
+            if len(results) >= max_files:
+                logger.warning(f"list_files hit max_files limit ({max_files})")
+                break
+
+            if match in seen:
+                continue
+            seen.add(match)
+
+            # Skip hidden files/dirs unless requested
+            if not include_hidden:
+                parts = match.relative_to(workspace_root).parts
+                if any(p.startswith(".") for p in parts):
+                    continue
+
+            # Apply ignore patterns
+            rel = match.relative_to(workspace_root)
+            if any(rel.match(ig) for ig in ignore):
+                continue
+
+            # Only list files, not directories
+            if not match.is_file():
+                continue
+
+            try:
+                stat = match.stat()
+                results.append({
+                    "path": str(rel),
+                    "size_bytes": stat.st_size,
+                })
+            except OSError as e:
+                logger.warning(f"Cannot stat {match}: {e}")
+
+        if len(results) >= max_files:
+            break
+
+    logger.info(f"list_files matched {len(results)} files")
+    return results
+
+
+def rg_search(
+    query: str,
+    workspace_root: Path,
+    globs: list[str] | None = None,
+    ignore: list[str] | None = None,
+    max_results: int = 50,
+    context_lines: int = 2,
+) -> list[dict]:
+    """
+    Search workspace using ripgrep with structured match results.
+
+    Uses PATH resolution to find the rg binary (installed via ripgrep-cli
+    or system package manager).
+
+    Args:
+        query: Search pattern (regex by default)
+        workspace_root: Workspace root for sandboxing
+        globs: File glob filters (e.g. ["*.py", "*.md"])
+        ignore: Glob patterns to exclude
+        max_results: Maximum number of matches to return
+        context_lines: Number of context lines before/after each match
+
+    Returns:
+        List of match dicts with path, line_number, line_text, context fields
+    """
+    rg_bin = shutil.which("rg")
+    if not rg_bin:
+        logger.error("ripgrep (rg) not found on PATH")
+        return [{"error": (
+            "ripgrep (rg) not found. Install via: pip install ripgrep-cli"
+        )}]
+
+    cmd: list[str] = [
+        rg_bin,
+        "--json",
+        "--max-count", str(max_results),
+        "--context", str(context_lines),
+    ]
+
+    # Add glob filters
+    if globs:
+        for g in globs:
+            cmd.extend(["--glob", g])
+
+    # Add ignore patterns
+    if ignore:
+        for ig in ignore:
+            cmd.extend(["--glob", f"!{ig}"])
+
+    cmd.append(query)
+    cmd.append(str(workspace_root))
+
+    logger.debug(f"rg command: {cmd}")
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(workspace_root),
+        )
+    except subprocess.TimeoutExpired:
+        logger.error("rg_search timed out after 30s")
+        return [{"error": "Search timed out after 30 seconds"}]
+    except Exception as e:
+        logger.error(f"rg_search failed: {e}")
+        return [{"error": f"Search failed: {e}"}]
+
+    # Exit code 1 = no matches (not an error)
+    if proc.returncode not in (0, 1):
+        logger.error(f"rg exited with code {proc.returncode}: {proc.stderr}")
+        return [{"error": f"ripgrep error: {proc.stderr.strip()}"}]
+
+    if proc.returncode == 1:
+        return []
+
+    # Parse JSON lines output
+    matches: list[dict] = []
+    context_buffer: list[str] = []
+
+    for raw_line in proc.stdout.splitlines():
+        try:
+            obj = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+
+        msg_type = obj.get("type")
+
+        if msg_type == "context":
+            data = obj["data"]
+            context_buffer.append(data["lines"]["text"].rstrip("\n"))
+
+        elif msg_type == "match":
+            data = obj["data"]
+            path_text = data["path"]["text"]
+
+            # Sandbox check: ensure match path is inside workspace
+            match_path = Path(path_text)
+            if match_path.is_absolute() and not validate_path(match_path, workspace_root):
+                continue
+
+            # Relative path for output
+            try:
+                rel_path = str(Path(path_text).relative_to(workspace_root))
+            except ValueError:
+                rel_path = path_text
+
+            line_text = data["lines"]["text"].rstrip("\n")
+            line_number = data["line_number"]
+
+            match_entry = {
+                "path": rel_path,
+                "line_number": line_number,
+                "line_text": line_text,
+            }
+
+            if context_buffer:
+                match_entry["context_before"] = list(context_buffer)
+                context_buffer.clear()
+
+            matches.append(match_entry)
+
+            if len(matches) >= max_results:
+                break
+
+        elif msg_type == "end":
+            # Attach trailing context to last match
+            pass
+
+    logger.info(f"rg_search found {len(matches)} matches for {query!r}")
+    return matches

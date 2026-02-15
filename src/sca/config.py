@@ -33,8 +33,11 @@ class Config:
         # OpenAI-compatible endpoint (LM Studio, Ollama, etc.)
         self.openai_base_url = os.getenv(
             "OPENAI_BASE_URL", 
-            "http://localhost:1234/v1"
+            "http://localhost:11434/v1"
         )
+
+        # Ollama default url: http://localhost:11434/v1
+        # LM Studio default url: http://localhost:1234/v1
         
         # API key (not needed for local models, but required by client)
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "not-needed")
@@ -42,16 +45,16 @@ class Config:
         # Model identifier (must match LM Studio/Ollama model name)
         self.model_name = os.getenv("MODEL_NAME", "local-model")
         
-        # Repo root override (for testing; normally auto-detected)
-        self.repo_root_override: Path | None = None
-        if repo_env := os.getenv("SCA_REPO_ROOT"):
-            self.repo_root_override = Path(repo_env).resolve()
+        # Workspace root override (for testing; normally auto-detected)
+        self.workspace_root_override: Path | None = None
+        if workspace_env := os.getenv("SCA_WORKSPACE_ROOT"):
+            self.workspace_root_override = Path(workspace_env).resolve()
     
     def __repr__(self) -> str:
         return (
             f"Config(base_url={self.openai_base_url!r}, "
             f"model={self.model_name!r}, "
-            f"repo_override={self.repo_root_override})"
+            f"workspace_override={self.workspace_root_override})"
         )
 
 
