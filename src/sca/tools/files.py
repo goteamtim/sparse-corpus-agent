@@ -53,17 +53,12 @@ def open_snippet(
         }
     
     try:
-        lines = resolved.read_text(encoding="utf-8").splitlines(keepends=True)
-        
         # Validate line range
         if start_line < 1:
             logger.warning(f"Invalid start_line {start_line}, using 1")
             start_line = 1
-        
-        if end_line is None:
-            end_line = len(lines)
-        
-        if end_line < start_line:
+
+        if end_line is not None and end_line < start_line:
             logger.error(f"Invalid range: {start_line}-{end_line}")
             return {
                 "ok": False,
@@ -73,10 +68,27 @@ def open_snippet(
                     "kind": "invalid_range",
                 },
             }
-        
-        # Extract snippet (convert to 0-indexed)
-        snippet_lines = lines[start_line - 1 : end_line]
-        snippet = "".join(snippet_lines)
+
+        # Stream lines instead of reading the entire file into memory.
+        # We skip lines before start_line and stop once we pass end_line,
+        # so only the requested window is buffered.
+        collected: list[str] = []
+        last_line = 0
+
+        with resolved.open(encoding="utf-8") as fh:
+            for i, line in enumerate(fh, start=1):
+                last_line = i
+                if i < start_line:
+                    continue
+                if end_line is not None and i > end_line:
+                    break
+                collected.append(line)
+
+        # If end_line was not specified, it means "to EOF"
+        if end_line is None:
+            end_line = last_line
+
+        snippet = "".join(collected)
         
         logger.info(
             f"Read {resolved.relative_to(workspace_root)} "
