@@ -64,19 +64,9 @@ def create_agent(
     # Load workspace context from AGENT.md
     workspace_context = read_workspace_prompt(workspace_root)
     
-    # Build system instructions
-    system_instructions = build_system_prompt(workspace_context, workspace_root, skill_prompt)
-    
     logger.info(f"Creating agent with model: {config.model_name}")
     logger.debug(f"Base URL: {config.openai_base_url}")
     logger.debug(f"Workspace root: {workspace_root}")
-    
-    # Create agent with tools
-    agent = Agent(
-        model,
-        instructions=system_instructions,
-        retries=2,  # Retry on transient failures
-    )
     
     # ── Define tool closures ────────────────────────────────────────
 
@@ -221,11 +211,25 @@ def create_agent(
             )
 
     registered: list[str] = []
-    for name, fn in tool_functions.items():
+    for name in tool_functions:
         if allowed is not None and name not in allowed:
             continue
-        agent.tool(fn)
         registered.append(name)
+
+    # ── Build system prompt with only the registered tools ──────────
+    system_instructions = build_system_prompt(
+        workspace_context, workspace_root, skill_prompt, registered
+    )
+
+    # ── Create agent and register tools ─────────────────────────────
+    agent = Agent(
+        model,
+        instructions=system_instructions,
+        retries=2,  # Retry on transient failures
+    )
+
+    for name in registered:
+        agent.tool(tool_functions[name])
 
     logger.info(
         f"Agent created with {len(registered)} tool(s): "
@@ -235,19 +239,35 @@ def create_agent(
     return agent
 
 
+# Canonical one-line descriptions for each tool, used in the system prompt.
+_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "read_file_snippet": "Read specific line ranges from files",
+    "get_file_info": "Check file metadata (size, existence, type)",
+    "search_files": "Search workspace content with ripgrep (regex patterns)",
+    "find_files": "List files matching glob patterns",
+    "get_code_outline": "Extract structural symbol outline from source files using Tree-sitter",
+}
+
+
 def build_system_prompt(
     workspace_context: str,
     workspace_root: Path,
     skill_prompt: str | None = None,
+    registered_tools: list[str] | None = None,
 ) -> str:
     """
     Build system prompt combining framework instructions, workspace context, and skill.
-    
+
+    Only the tools in *registered_tools* are advertised to the model so the
+    system prompt never lies about what is available.
+
     Args:
         workspace_context: Content from AGENT.md and .agent/*.md
         workspace_root: Workspace root path
         skill_prompt: Optional skill instructions to append
-    
+        registered_tools: Names of tools actually registered on the agent.
+            If ``None``, all baseline tools are listed.
+
     Returns:
         Complete system prompt string
     """
@@ -261,19 +281,23 @@ Core principles:
 - Be concise but thorough: Provide relevant context without unnecessary detail
 
 Available tools:
-- read_file_snippet: Read specific line ranges from files
-- get_file_info: Check file metadata (size, existence, type)
-- search_files: Search workspace content with ripgrep (regex patterns)
-- find_files: List files matching glob patterns
 """
 
+    # List only the tools that are actually registered
+    if registered_tools is None:
+        registered_tools = ["read_file_snippet", "get_file_info", "search_files", "find_files"]
+
     config = get_config()
-    if config.grammar_configured:
-        base_prompt += f"""- get_code_outline: Extract structural symbol outline from source files
-  (functions, classes, methods, etc.) using Tree-sitter.
-  Configured grammar: {config.grammar_name}
-  Supported extensions: {', '.join(config.grammar_extensions)}
-"""
+    for name in registered_tools:
+        desc = _TOOL_DESCRIPTIONS.get(name, name)
+        line = f"- {name}: {desc}"
+        # Append grammar details for get_code_outline
+        if name == "get_code_outline" and config.grammar_configured:
+            line += (
+                f"\n  Configured grammar: {config.grammar_name}"
+                f"\n  Supported extensions: {', '.join(config.grammar_extensions)}"
+            )
+        base_prompt += line + "\n"
 
     base_prompt += """
 When answering questions:
@@ -281,7 +305,7 @@ When answering questions:
 2. Cite specific file paths and line numbers in your responses
 3. If uncertain, state what information is missing and what tools could help
 """
-    
+
     if workspace_context:
         base_prompt += f"\n\n## Workspace Context\n\n{workspace_context}"
         logger.debug(f"Added {len(workspace_context)} chars of workspace context from AGENT.md")
