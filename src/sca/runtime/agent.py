@@ -5,11 +5,13 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+from typing import Callable
 
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
 
 from sca.config import get_config
+from sca.skills import Skill
 from sca.tools import ToolResult
 from sca.tools.files import file_stats, list_files, open_snippet, rg_search
 from sca.tools.tree_sitter_tool import get_outline
@@ -18,7 +20,11 @@ from sca.tools.workspace_prompt import read_workspace_prompt
 logger = logging.getLogger(__name__)
 
 
-def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent:
+def create_agent(
+    workspace_root: Path,
+    skill_prompt: str | None = None,
+    active_skill: Skill | None = None,
+) -> Agent:
     """
     Create a PydanticAI agent with workspace-aware tools.
     
@@ -26,7 +32,7 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
     - OpenAI-compatible model (LM Studio, Ollama, etc.)
     - System prompt from AGENT.md + .agent/*.md (if exists)
     - Optionally, a skill prompt for workflow-specific instructions
-    - File reading/search tools
+    - File reading/search tools (filtered by skill allowlist when active)
     
     Conversation history management:
     - Pass result.all_messages() to message_history param in subsequent runs
@@ -36,9 +42,15 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
     Args:
         workspace_root: Workspace root path for tool context
         skill_prompt: Optional skill instructions to append to system prompt
+        active_skill: Optional active skill whose ``tools:`` list is
+            enforced as a hard allowlist. If omitted or the skill's tools
+            list is empty, all baseline tools are registered.
     
     Returns:
         Configured Agent instance
+    
+    Raises:
+        ValueError: If the skill references unknown tool names.
     """
     config = get_config()
     
@@ -66,9 +78,9 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
         retries=2,  # Retry on transient failures
     )
     
-    # Register file tools with workspace context
-    @agent.tool
-    def read_file_snippet(
+    # ── Define tool closures ────────────────────────────────────────
+
+    def _read_file_snippet(
         ctx: RunContext,
         path: str,
         start_line: int = 1,
@@ -89,8 +101,7 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
         """
         return open_snippet(path, workspace_root, start_line, end_line)
     
-    @agent.tool
-    def get_file_info(ctx: RunContext, path: str) -> ToolResult:
+    def _get_file_info(ctx: RunContext, path: str) -> ToolResult:
         """
         Get file metadata without reading content.
         
@@ -104,8 +115,7 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
         """
         return file_stats(path, workspace_root)
 
-    @agent.tool
-    def search_files(
+    def _search_files(
         ctx: RunContext,
         query: str,
         globs: list[str] | None = None,
@@ -130,8 +140,7 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
         """
         return rg_search(query, workspace_root, globs, ignore, max_results, context_lines)
 
-    @agent.tool
-    def find_files(
+    def _find_files(
         ctx: RunContext,
         globs: list[str] | None = None,
         ignore: list[str] | None = None,
@@ -152,12 +161,18 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
         """
         return list_files(workspace_root, globs, ignore, max_files, include_hidden)
 
-    # ── Tree-sitter outline tool (conditional on grammar config) ──
-    tool_count = 4
+    # ── Canonical tool registry ─────────────────────────────────────
+    # Maps public tool name → closure.  Order is stable for logging.
+    tool_functions: dict[str, Callable] = {
+        "read_file_snippet": _read_file_snippet,
+        "get_file_info": _get_file_info,
+        "search_files": _search_files,
+        "find_files": _find_files,
+    }
 
+    # Tree-sitter outline tool (conditional on grammar config)
     if config.grammar_configured:
-        @agent.tool
-        def get_code_outline(
+        def _get_code_outline(
             ctx: RunContext,
             path: str,
             max_depth: int = 2,
@@ -187,16 +202,34 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
                 max_depth,
             )
 
-        tool_count = 5
+        tool_functions["get_code_outline"] = _get_code_outline
         logger.info(
             f"Tree-sitter grammar configured: {config.grammar_name} "
             f"(extensions: {', '.join(config.grammar_extensions)})"
         )
 
+    # ── Skill-based tool allowlist ──────────────────────────────────
+    allowed: set[str] | None = None
+    if active_skill and active_skill.tools:
+        allowed = set(active_skill.tools)
+        # Fail fast if the skill references tools that don't exist
+        unknown = allowed - set(tool_functions.keys())
+        if unknown:
+            raise ValueError(
+                f"Skill '{active_skill.name}' references unknown tools: "
+                f"{sorted(unknown)}"
+            )
+
+    registered: list[str] = []
+    for name, fn in tool_functions.items():
+        if allowed is not None and name not in allowed:
+            continue
+        agent.tool(fn)
+        registered.append(name)
+
     logger.info(
-        f"Agent created with {tool_count} tools: "
-        "read_file_snippet, get_file_info, search_files, find_files"
-        + (", get_code_outline" if config.grammar_configured else "")
+        f"Agent created with {len(registered)} tool(s): "
+        + ", ".join(registered)
     )
     
     return agent

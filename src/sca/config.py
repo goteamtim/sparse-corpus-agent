@@ -44,11 +44,6 @@ class Config:
         
         # Model identifier (must match LM Studio/Ollama model name)
         self.model_name = os.getenv("MODEL_NAME", "local-model")
-        
-        # Workspace root override (for testing; normally auto-detected)
-        self.workspace_root_override: Path | None = None
-        if workspace_env := os.getenv("SCA_WORKSPACE_ROOT"):
-            self.workspace_root_override = Path(workspace_env).resolve()
 
         # ── Tree-sitter grammar configuration ──────────────────────────
         # Path to the compiled grammar shared library (.so / .dll / .dylib)
@@ -90,7 +85,6 @@ class Config:
         return (
             f"Config(base_url={self.openai_base_url!r}, "
             f"model={self.model_name!r}, "
-            f"workspace_override={self.workspace_root_override}, "
             f"grammar={self.grammar_name!r})"
         )
 

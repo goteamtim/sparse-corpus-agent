@@ -193,6 +193,29 @@ export OPENAI_API_KEY="not-needed"   # placeholder for OpenAI-compatible clients
 export MODEL_NAME="your-lm-studio-model-id"
 ```
 
+### Repo resolution
+
+You can run `sca` from anywhere — it doesn't need to be invoked from inside the target repo. The workspace root is resolved using the following precedence (first match wins):
+
+| Priority | Source | Example |
+|----------|--------|---------|
+| 1 | `--repo` CLI flag | `sca chat --repo /path/to/repo` |
+| 2 | `SCA_REPO` env var | `SCA_REPO=/path/to/repo sca chat` |
+| 3 | `SCA_WORKSPACE_ROOT` env var (legacy) | `SCA_WORKSPACE_ROOT=/path/to/repo sca chat` |
+| 4 | Auto-detect | Walk upward from cwd looking for `.git` or `AGENT.md` |
+
+If none of these resolve to a valid directory, `sca` exits with an error.
+
+```bash
+# From anywhere on your system:
+sca chat --repo ~/projects/my-lang-project
+
+# Or set once for the shell session:
+export SCA_REPO=~/projects/my-lang-project
+sca chat
+sca explain src/parser.py
+```
+
 ### 4) Tree-sitter grammar setup (optional)
 
 The framework ships with no bundled grammars — you provide your own. This is intentional: the framework targets niche languages that don't have pre-packaged tree-sitter bindings.

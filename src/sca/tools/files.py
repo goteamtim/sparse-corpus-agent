@@ -260,8 +260,7 @@ def rg_search(
     """
     Search workspace using ripgrep with structured match results.
 
-    Uses PATH resolution to find the rg binary (installed via ripgrep-cli
-    or system package manager).
+    Uses PATH resolution to find the rg binary.
 
     Args:
         query: Search pattern (regex by default)
@@ -281,7 +280,7 @@ def rg_search(
             "ok": False,
             "data": None,
             "error": {
-                "message": "ripgrep (rg) not found. Install via: pip install ripgrep-cli",
+                "message": "ripgrep (rg) not found. Install and retry.",
                 "kind": "missing_binary",
             },
         }

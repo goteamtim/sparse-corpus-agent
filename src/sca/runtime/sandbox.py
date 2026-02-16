@@ -3,36 +3,74 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
-
-from sca.config import get_config
 
 logger = logging.getLogger(__name__)
 
+# Marker files/dirs that indicate a repository root
+_ROOT_MARKERS = (".git", "AGENT.md")
 
-def find_workspace_root(start: Path | None = None) -> Path:
+
+def find_workspace_root(
+    repo_path: Path | None = None,
+    start: Path | None = None,
+) -> Path:
     """
-    Find workspace root from the current working directory.
-    
-    Uses the directory where the tool was invoked from as the workspace root.
-    
+    Resolve the workspace/repo root directory.
+
+    Resolution order (first match wins):
+      1. Explicit *repo_path* argument (from ``--repo`` CLI flag)
+      2. ``SCA_REPO`` environment variable
+      3. ``SCA_WORKSPACE_ROOT`` environment variable (legacy)
+      4. Walk upward from *start* (default: cwd) looking for ``.git`` or ``AGENT.md``
+
     Args:
-        start: Starting path (defaults to current working directory)
-    
+        repo_path: Explicit repo root (already resolved by caller).
+        start: Starting directory for upward search (defaults to cwd).
+
     Returns:
-        Resolved path to workspace root (current working directory)
+        Resolved path to the workspace root.
+
+    Raises:
+        ValueError: If no root can be determined.
     """
-    config = get_config()
-    
-    # Use config override if set (for testing)
-    if config.workspace_root_override:
-        logger.debug(f"Using workspace root override: {config.workspace_root_override}")
-        return config.workspace_root_override
-    
-    root = (start or Path.cwd()).resolve()
-    logger.debug(f"Using workspace root: {root}")
-    
-    return root
+    # 1. Explicit argument
+    if repo_path is not None:
+        root = repo_path.resolve()
+        if not root.exists() or not root.is_dir():
+            raise ValueError(f"Repo path does not exist or is not a directory: {root}")
+        logger.debug(f"Using explicit repo path: {root}")
+        return root
+
+    # 2. SCA_REPO env var
+    if env_repo := os.getenv("SCA_REPO"):
+        root = Path(env_repo).expanduser().resolve()
+        if not root.exists() or not root.is_dir():
+            raise ValueError(f"SCA_REPO path does not exist or is not a directory: {root}")
+        logger.debug(f"Using SCA_REPO: {root}")
+        return root
+
+    # 3. SCA_WORKSPACE_ROOT env var (legacy, superseded by SCA_REPO)
+    if env_ws := os.getenv("SCA_WORKSPACE_ROOT"):
+        root = Path(env_ws).expanduser().resolve()
+        if not root.exists() or not root.is_dir():
+            raise ValueError(
+                f"SCA_WORKSPACE_ROOT path does not exist or is not a directory: {root}"
+            )
+        logger.debug(f"Using SCA_WORKSPACE_ROOT (legacy): {root}")
+        return root
+
+    # 4. Walk upward from start/cwd looking for marker files
+    cur = (start or Path.cwd()).resolve()
+    for p in [cur, *cur.parents]:
+        if any((p / marker).exists() for marker in _ROOT_MARKERS):
+            logger.debug(f"Auto-detected workspace root: {p}")
+            return p
+
+    raise ValueError(
+        "No repo found. Run inside a repo, pass --repo, or set SCA_REPO."
+    )
 
 
 def validate_path(path: Path, workspace_root: Path) -> bool:

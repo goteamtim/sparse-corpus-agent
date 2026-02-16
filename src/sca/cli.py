@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+from pathlib import Path
+from typing import Optional
 
 import typer
 from rich import print
@@ -10,7 +13,7 @@ from rich.console import Console
 from sca.config import get_config, setup_logging
 from sca.runtime.agent import create_agent
 from sca.runtime.sandbox import find_workspace_root
-from sca.skills import build_skill_prompt, discover_skills, load_skill
+from sca.skills import Skill, build_skill_prompt, discover_skills, load_skill
 from sca.tools.files import open_snippet, file_stats, rg_search
 
 app = typer.Typer(add_completion=False, help="Sparse Corpus Agent (sca)")
@@ -19,6 +22,16 @@ app.add_typer(skill_app, name="skill")
 
 console = Console()
 logger = logging.getLogger(__name__)
+
+
+def resolve_repo_arg(repo: Optional[str]) -> Optional[Path]:
+    """Resolve an explicit --repo value or SCA_REPO env var to a Path."""
+    if repo:
+        return Path(repo).expanduser().resolve()
+    env = os.getenv("SCA_REPO")
+    if env:
+        return Path(env).expanduser().resolve()
+    return None
 
 
 def _check_ripgrep() -> None:
@@ -36,6 +49,7 @@ def _check_ripgrep() -> None:
 @app.command()
 def chat(
     skill_name: str = typer.Option(None, "--skill", "-s", help="Load a skill by name"),
+    repo: Optional[str] = typer.Option(None, "--repo", help="Path to target repo"),
 ) -> None:
     """
     Start an interactive chat session with the agent.
@@ -51,16 +65,17 @@ def chat(
     _check_ripgrep()
     
     # Find workspace root and create agent
-    workspace_root = find_workspace_root()
+    workspace_root = find_workspace_root(repo_path=resolve_repo_arg(repo))
     logger.info(f"Starting chat session for workspace: {workspace_root}")
 
     # Load skill if specified
+    active_skill: Skill | None = None
     active_skill_prompt: str | None = None
     if skill_name:
-        skill = load_skill(skill_name, workspace_root)
-        if skill:
-            active_skill_prompt = build_skill_prompt(skill, workspace_root)
-            print(f"[bold magenta]Using skill:[/bold magenta] {skill.name} — {skill.description}")
+        active_skill = load_skill(skill_name, workspace_root)
+        if active_skill:
+            active_skill_prompt = build_skill_prompt(active_skill, workspace_root)
+            print(f"[bold magenta]Using skill:[/bold magenta] {active_skill.name} — {active_skill.description}")
         else:
             print(f"[red]Error:[/red] Skill '{skill_name}' not found")
             raise typer.Exit(code=1)
@@ -71,7 +86,7 @@ def chat(
     print(f"[dim]Type '/skillname' to load a skill[/dim]\n")
     
     try:
-        agent = create_agent(workspace_root, skill_prompt=active_skill_prompt)
+        agent = create_agent(workspace_root, skill_prompt=active_skill_prompt, active_skill=active_skill)
     except Exception as e:
         logger.error(f"Failed to create agent: {e}")
         print(f"[red]Error:[/red] Could not initialize agent: {e}")
@@ -100,14 +115,19 @@ def chat(
                 new_skill_name = user_input[1:].strip()
                 if not new_skill_name:
                     continue
-                skill = load_skill(new_skill_name, workspace_root)
-                if skill:
-                    active_skill_prompt = build_skill_prompt(skill, workspace_root)
+                new_skill = load_skill(new_skill_name, workspace_root)
+                if new_skill:
+                    active_skill = new_skill
+                    active_skill_prompt = build_skill_prompt(active_skill, workspace_root)
                     # Recreate agent with new skill, preserving nothing
                     # (skill changes are a fresh context)
-                    agent = create_agent(workspace_root, skill_prompt=active_skill_prompt)
+                    try:
+                        agent = create_agent(workspace_root, skill_prompt=active_skill_prompt, active_skill=active_skill)
+                    except ValueError as e:
+                        print(f"[red]Error loading skill:[/red] {e}")
+                        continue
                     message_history = []
-                    print(f"[bold magenta]Loaded skill:[/bold magenta] {skill.name} — {skill.description}")
+                    print(f"[bold magenta]Loaded skill:[/bold magenta] {active_skill.name} — {active_skill.description}")
                     print("[dim]Conversation reset for new skill context.[/dim]")
                 else:
                     print(f"[yellow]Skill '{new_skill_name}' not found.[/yellow] Use 'sca skill list' to see available skills.")
@@ -142,7 +162,10 @@ def chat(
 
 
 @app.command()
-def explain(path: str) -> None:
+def explain(
+    path: str,
+    repo: Optional[str] = typer.Option(None, "--repo", help="Path to target repo"),
+) -> None:
     """
     Explain a file using snippets and citations.
 
@@ -150,7 +173,7 @@ def explain(path: str) -> None:
     an evidence-based explanation.
     """
     setup_logging()
-    workspace_root = find_workspace_root()
+    workspace_root = find_workspace_root(repo_path=resolve_repo_arg(repo))
 
     print(f"[bold cyan]sca explain[/bold cyan] {path}")
     print(f"[dim]Workspace root:[/dim] {workspace_root}\n")
@@ -205,7 +228,10 @@ def explain(path: str) -> None:
 
 
 @app.command()
-def find(query: str) -> None:
+def find(
+    query: str,
+    repo: Optional[str] = typer.Option(None, "--repo", help="Path to target repo"),
+) -> None:
     """
     Search the workspace and show matches with citations.
 
@@ -214,7 +240,7 @@ def find(query: str) -> None:
     """
     setup_logging()
     _check_ripgrep()
-    workspace_root = find_workspace_root()
+    workspace_root = find_workspace_root(repo_path=resolve_repo_arg(repo))
 
     print(f"[bold cyan]sca find[/bold cyan] {query!r}")
     print(f"[dim]Workspace root:[/dim] {workspace_root}\n")
@@ -277,14 +303,17 @@ def skill_list() -> None:
 
 
 @skill_app.command("run")
-def skill_run(name: str) -> None:
+def skill_run(
+    name: str,
+    repo: Optional[str] = typer.Option(None, "--repo", help="Path to target repo"),
+) -> None:
     """
     Run a skill by name (starts a chat session with the skill loaded).
 
     Equivalent to: sca chat --skill <name>
     """
     setup_logging()
-    workspace_root = find_workspace_root()
+    workspace_root = find_workspace_root(repo_path=resolve_repo_arg(repo))
 
     skill = load_skill(name, workspace_root)
     if not skill:
@@ -293,4 +322,4 @@ def skill_run(name: str) -> None:
         raise typer.Exit(code=1)
 
     # Delegate to chat with skill loaded
-    chat(skill_name=name)
+    chat(skill_name=name, repo=repo)
