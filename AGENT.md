@@ -8,7 +8,10 @@ This is a Python 3.12+ CLI agent framework for evidence-first code exploration.
   - `cli.py` - CLI commands (chat, explain, find, history)
   - `config.py` - Environment configuration and logging
   - `runtime/` - Agent runtime and sandboxing
-  - `tools/` - File reading and repo context tools
+  - `tools/` - File reading, search, and code outline tools
+    - `files.py` - File reading, listing, and ripgrep search
+    - `workspace_prompt.py` - AGENT.md and .agent/*.md loading
+    - `tree_sitter_tool.py` - Tree-sitter code outline extraction
 
 ## Conventions
 
@@ -31,4 +34,10 @@ This is a Python 3.12+ CLI agent framework for evidence-first code exploration.
    export OPENAI_BASE_URL="http://localhost:1234/v1"
    export MODEL_NAME="your-model-name"
    ```
-3. Run chat: `python -m sca chat`
+3. (Optional) Configure a Tree-sitter grammar for code outline:
+   ```bash
+   export SCA_GRAMMAR_PATH="/path/to/tree-sitter-mylang.so"
+   export SCA_GRAMMAR_NAME="mylang"
+   export SCA_GRAMMAR_EXTENSIONS=".ml,.mli"
+   ```
+4. Run chat: `python -m sca chat`

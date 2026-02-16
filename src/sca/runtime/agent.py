@@ -12,6 +12,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from sca.config import get_config
 from sca.tools import ToolResult
 from sca.tools.files import file_stats, list_files, open_snippet, rg_search
+from sca.tools.tree_sitter_tool import get_outline
 from sca.tools.workspace_prompt import read_workspace_prompt
 
 logger = logging.getLogger(__name__)
@@ -151,9 +152,51 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
         """
         return list_files(workspace_root, globs, ignore, max_files, include_hidden)
 
+    # ── Tree-sitter outline tool (conditional on grammar config) ──
+    tool_count = 4
+
+    if config.grammar_configured:
+        @agent.tool
+        def get_code_outline(
+            ctx: RunContext,
+            path: str,
+            max_depth: int = 2,
+        ) -> ToolResult:
+            """
+            Extract a structural code outline from a source file.
+
+            Returns top-level symbols (functions, classes, etc.) and one level
+            of nesting (e.g. methods inside classes) by default.
+
+            Only works on files whose extension matches the configured grammar.
+
+            Args:
+                path: File path relative to workspace root
+                max_depth: Maximum nesting depth (default 2: top-level + nested)
+
+            Returns:
+                ToolResult with data containing symbols list.
+                Each symbol has: name, kind, start_line, end_line, depth.
+            """
+            return get_outline(
+                path,
+                workspace_root,
+                config.grammar_path,
+                config.grammar_name,
+                config.grammar_extensions,
+                max_depth,
+            )
+
+        tool_count = 5
+        logger.info(
+            f"Tree-sitter grammar configured: {config.grammar_name} "
+            f"(extensions: {', '.join(config.grammar_extensions)})"
+        )
+
     logger.info(
-        "Agent created with 4 tools: "
+        f"Agent created with {tool_count} tools: "
         "read_file_snippet, get_file_info, search_files, find_files"
+        + (", get_code_outline" if config.grammar_configured else "")
     )
     
     return agent
@@ -189,7 +232,17 @@ Available tools:
 - get_file_info: Check file metadata (size, existence, type)
 - search_files: Search workspace content with ripgrep (regex patterns)
 - find_files: List files matching glob patterns
+"""
 
+    config = get_config()
+    if config.grammar_configured:
+        base_prompt += f"""- get_code_outline: Extract structural symbol outline from source files
+  (functions, classes, methods, etc.) using Tree-sitter.
+  Configured grammar: {config.grammar_name}
+  Supported extensions: {', '.join(config.grammar_extensions)}
+"""
+
+    base_prompt += """
 When answering questions:
 1. Use tools to gather evidence from the workspace
 2. Cite specific file paths and line numbers in your responses

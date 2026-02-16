@@ -49,12 +49,49 @@ class Config:
         self.workspace_root_override: Path | None = None
         if workspace_env := os.getenv("SCA_WORKSPACE_ROOT"):
             self.workspace_root_override = Path(workspace_env).resolve()
-    
+
+        # ── Tree-sitter grammar configuration ──────────────────────────
+        # Path to the compiled grammar shared library (.so / .dll / .dylib)
+        self.grammar_path: Path | None = None
+        if grammar_env := os.getenv("SCA_GRAMMAR_PATH"):
+            self.grammar_path = Path(grammar_env).resolve()
+
+        # Language name — must match the exported C symbol tree_sitter_<name>()
+        self.grammar_name: str | None = os.getenv("SCA_GRAMMAR_NAME")
+
+        # File extensions this grammar applies to (comma-separated, e.g. ".xy,.xyz")
+        self.grammar_extensions: list[str] = []
+        if ext_env := os.getenv("SCA_GRAMMAR_EXTENSIONS"):
+            self.grammar_extensions = [
+                e.strip() if e.strip().startswith(".") else f".{e.strip()}"
+                for e in ext_env.split(",")
+                if e.strip()
+            ]
+
+        # Validate: all three must be set together or none
+        grammar_fields = [self.grammar_path, self.grammar_name, self.grammar_extensions]
+        grammar_set = [f for f in grammar_fields if f]
+        if 0 < len(grammar_set) < 3:
+            logging.getLogger(__name__).warning(
+                "Partial tree-sitter config: SCA_GRAMMAR_PATH, SCA_GRAMMAR_NAME, "
+                "and SCA_GRAMMAR_EXTENSIONS must all be set together. "
+                f"Got: path={self.grammar_path}, name={self.grammar_name}, "
+                f"extensions={self.grammar_extensions}"
+            )
+
+    @property
+    def grammar_configured(self) -> bool:
+        """True when all three grammar settings are present."""
+        return bool(
+            self.grammar_path and self.grammar_name and self.grammar_extensions
+        )
+
     def __repr__(self) -> str:
         return (
             f"Config(base_url={self.openai_base_url!r}, "
             f"model={self.model_name!r}, "
-            f"workspace_override={self.workspace_root_override})"
+            f"workspace_override={self.workspace_root_override}, "
+            f"grammar={self.grammar_name!r})"
         )
 
 

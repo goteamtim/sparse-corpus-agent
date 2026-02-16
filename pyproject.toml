@@ -12,6 +12,7 @@ dependencies = [
   "pydantic>=2.7",
   "pydantic-ai>=1.59.0",
   "PyYAML>=6.0.1",
+  "tree-sitter>=0.24",
 ]
 
 [project.scripts]

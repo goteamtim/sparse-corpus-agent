@@ -46,6 +46,13 @@ The agent automatically loads this file (and optionally `.agent/*.md`) as the fi
    - Ripgrep-style search with structured match results.
 5. `file_stats(path)`
    - Size, line count, binary detection, hash (for "don't open huge/minified/binary" decisions).
+6. `get_outline(path, max_depth=2)`
+   - Tree-sitter code outline extraction. Returns structural symbols (functions, classes, methods, etc.) with line ranges.
+   - Requires a user-provided compiled grammar (`.so`/`.dll`/`.dylib`).
+   - Uses a 3-tier fall-through resolution strategy:
+     1. **Custom query:** `.agent/queries/{lang}/outline.scm` — full surgical control using tree-sitter query patterns (follows `tags.scm` conventions: `@name` + `@definition.*` captures).
+     2. **Registry:** `.agent/grammar.yaml` with an `outline_node_types` list.
+     3. **Universal defaults:** Hardcoded common node types (`function_definition`, `class_definition`, etc.).
 
 > Note: all tools are workspace-scoped and sandboxed. No reading outside the workspace root. No arbitrary shell execution.
 
@@ -154,6 +161,7 @@ To keep behavior predictable, auto-selection should be conservative:
 
 Optional:
 - `uv`
+- A compiled Tree-sitter grammar for your language (see "Tree-sitter grammar setup" below)
 
 ### 1) Start LM Studio server
 Start the local server in LM Studio (OpenAI-compatible endpoint). Configure the base URL via env var below.
@@ -185,6 +193,40 @@ export OPENAI_API_KEY="not-needed"   # placeholder for OpenAI-compatible clients
 export MODEL_NAME="your-lm-studio-model-id"
 ```
 
+### 4) Tree-sitter grammar setup (optional)
+
+The framework ships with no bundled grammars — you provide your own. This is intentional: the framework targets niche languages that don't have pre-packaged tree-sitter bindings.
+
+**Build a grammar:**
+```bash
+cd tree-sitter-mylang/
+tree-sitter generate       # generates src/parser.c from grammar.js
+tree-sitter build -o mylang.so   # compiles to shared library (.so / .dll / .dylib)
+```
+
+**Configure the three env vars:**
+```bash
+export SCA_GRAMMAR_PATH="/path/to/mylang.so"      # compiled shared library
+export SCA_GRAMMAR_NAME="mylang"                   # language name (matches tree_sitter_<name>() export)
+export SCA_GRAMMAR_EXTENSIONS=".ml,.mli"           # file extensions this grammar applies to
+```
+
+All three must be set together. When configured, the agent gains a `get_code_outline` tool.
+
+**Customize symbol extraction (optional):**
+
+The tool uses a 3-tier fall-through strategy:
+
+1. **Custom query** — Create `.agent/queries/{grammar_name}/outline.scm` with tree-sitter query patterns following `tags.scm` conventions (`@name` + `@definition.*` captures). This gives you full control over what symbols are extracted.
+2. **Registry** — Create `.agent/grammar.yaml` with an `outline_node_types` list:
+   ```yaml
+   outline_node_types:
+     - function_definition
+     - class_definition
+     - method_definition
+   ```
+3. **Universal defaults** — If neither of the above exists, a built-in list of common node types is used.
+
 ---
 
 ## Safety / constraints
@@ -197,7 +239,8 @@ export MODEL_NAME="your-lm-studio-model-id"
 ---
 
 ## Roadmap (later)
-- Pluggable analyzers (tree-sitter, AST, doc extraction)
+- Additional pluggable analyzers (AST, doc extraction)
+- Multi-grammar support (multiple languages per workspace)
 
 ---
 
