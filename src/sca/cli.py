@@ -278,10 +278,12 @@ def find(
 
 
 @skill_app.command("list")
-def skill_list() -> None:
+def skill_list(
+    repo: Optional[str] = typer.Option(None, "--repo", help="Path to target repo"),
+) -> None:
     """List available skills in .agent/skills/."""
     setup_logging()
-    workspace_root = find_workspace_root()
+    workspace_root = find_workspace_root(repo_path=resolve_repo_arg(repo))
     skills = discover_skills(workspace_root)
 
     if not skills:
