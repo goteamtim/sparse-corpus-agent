@@ -12,20 +12,15 @@ logger = logging.getLogger(__name__)
 
 def find_workspace_root(start: Path | None = None) -> Path:
     """
-    Find workspace root by walking up from start path.
+    Find workspace root from the current working directory.
     
-    Looks for:
-    - .git directory (git repository marker)
-    - AGENT.md file (workspace context marker)
-    
-    Falls back to current working directory if no markers found,
-    allowing the tool to work with any folder.
+    Uses the directory where the tool was invoked from as the workspace root.
     
     Args:
         start: Starting path (defaults to current working directory)
     
     Returns:
-        Resolved path to workspace root, falls back to CWD if not found
+        Resolved path to workspace root (current working directory)
     """
     config = get_config()
     
@@ -34,19 +29,10 @@ def find_workspace_root(start: Path | None = None) -> Path:
         logger.debug(f"Using workspace root override: {config.workspace_root_override}")
         return config.workspace_root_override
     
-    cur = (start or Path.cwd()).resolve()
-    logger.debug(f"Searching for workspace root from: {cur}")
+    root = (start or Path.cwd()).resolve()
+    logger.debug(f"Using workspace root: {root}")
     
-    for p in [cur, *cur.parents]:
-        if (p / ".git").exists():
-            logger.debug(f"Found workspace root via .git: {p}")
-            return p
-        if (p / "AGENT.md").exists():
-            logger.debug(f"Found workspace root via AGENT.md: {p}")
-            return p
-    
-    logger.warning(f"No workspace root markers found, using: {cur}")
-    return cur
+    return root
 
 
 def validate_path(path: Path, workspace_root: Path) -> bool:

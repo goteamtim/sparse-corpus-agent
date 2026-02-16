@@ -1,6 +1,6 @@
 # Sparse Corpus Agent Repository
 
-This is a Python 3.12 CLI agent framework for evidence-first code exploration.
+This is a Python 3.12+ CLI agent framework for evidence-first code exploration.
 
 ## Project Structure
 

@@ -10,7 +10,7 @@ from sca.runtime.sandbox import safe_resolve_path
 logger = logging.getLogger(__name__)
 
 
-def read_repo_prompt(workspace_root: Path) -> str:
+def read_workspace_prompt(workspace_root: Path) -> str:
     """
     Load AGENT.md and supplementary .agent/*.md files from workspace root.
 

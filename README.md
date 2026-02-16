@@ -8,16 +8,9 @@ This repo provides a generic framework with a minimal toolset and a lightweight 
 
 ---
 
-
-
-
-
 ### Environment + dependency management
 - Recommended: `uv`
 - Supported fallback: `python -m venv` + `pip`
-
-
-
 ---
 
 ## Core ideas
@@ -43,7 +36,7 @@ The agent automatically loads this file (and optionally `.agent/*.md`) as the fi
 ## MVP scope: tools
 
 ### Workspace-scoped primitives
-1. `read_repo_prompt()`
+1. `read_workspace_prompt()`
    - Loads `AGENT.md` (and optional `.agent/*.md`) from workspace root.
 2. `list_files(globs, ignore, max_files, include_hidden=False)`
    - Returns a structured list of paths and basic metadata.

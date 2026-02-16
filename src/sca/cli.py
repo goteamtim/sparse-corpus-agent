@@ -40,7 +40,7 @@ def chat(
     """
     Start an interactive chat session with the agent.
     
-    The agent has access to repository files and can answer questions
+    The agent has access to workspace files and can answer questions
     about the codebase. Type 'quit' or 'exit' to end the session.
 
     Use --skill to start with a skill loaded, or type /skillname

@@ -10,9 +10,8 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
 
 from sca.config import get_config
-from sca.runtime.sandbox import find_workspace_root
 from sca.tools.files import file_stats, list_files, open_snippet, rg_search
-from sca.tools.repo_prompt import read_repo_prompt
+from sca.tools.workspace_prompt import read_workspace_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +48,7 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
     model = OpenAIChatModel(config.model_name)
     
     # Load workspace context from AGENT.md
-    workspace_context = read_repo_prompt(workspace_root)
+    workspace_context = read_workspace_prompt(workspace_root)
     
     # Build system instructions
     system_instructions = build_system_prompt(workspace_context, workspace_root, skill_prompt)
@@ -65,7 +64,7 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
         retries=2,  # Retry on transient failures
     )
     
-    # Register file tools with repo context
+    # Register file tools with workspace context
     @agent.tool
     def read_file_snippet(
         ctx: RunContext,
