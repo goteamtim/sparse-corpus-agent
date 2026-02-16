@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from sca.runtime.sandbox import safe_resolve_path, validate_path
+from sca.tools import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ def open_snippet(
     workspace_root: Path,
     start_line: int = 1,
     end_line: int | None = None,
-) -> str:
+) -> ToolResult:
     """
     Read a line-ranged snippet from a file.
     
@@ -31,17 +32,25 @@ def open_snippet(
         end_line: Last line to read (1-indexed, inclusive). If None, read to EOF
     
     Returns:
-        File content for specified line range, or empty string on error
+        ToolResult with data containing path, start_line, end_line, text
     """
     resolved = safe_resolve_path(path, workspace_root, must_exist=True)
     
     if not resolved:
         logger.error(f"Cannot read snippet: invalid path {path}")
-        return ""
+        return {
+            "ok": False,
+            "data": None,
+            "error": {"message": f"Invalid path: {path}", "kind": "path_error"},
+        }
     
     if not resolved.is_file():
         logger.error(f"Path is not a file: {resolved}")
-        return ""
+        return {
+            "ok": False,
+            "data": None,
+            "error": {"message": f"Path is not a file: {path}", "kind": "path_error"},
+        }
     
     try:
         lines = resolved.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -56,7 +65,14 @@ def open_snippet(
         
         if end_line < start_line:
             logger.error(f"Invalid range: {start_line}-{end_line}")
-            return ""
+            return {
+                "ok": False,
+                "data": None,
+                "error": {
+                    "message": f"Invalid range: {start_line}-{end_line}",
+                    "kind": "invalid_range",
+                },
+            }
         
         # Extract snippet (convert to 0-indexed)
         snippet_lines = lines[start_line - 1 : end_line]
@@ -67,17 +83,34 @@ def open_snippet(
             f"[L{start_line}-L{end_line}] ({len(snippet)} chars)"
         )
         
-        return snippet
+        return {
+            "ok": True,
+            "data": {
+                "path": str(resolved.relative_to(workspace_root)),
+                "start_line": start_line,
+                "end_line": end_line,
+                "text": snippet,
+            },
+            "error": None,
+        }
     
     except UnicodeDecodeError:
         logger.error(f"Cannot decode file (binary?): {resolved}")
-        return ""
+        return {
+            "ok": False,
+            "data": None,
+            "error": {"message": f"Cannot decode file (binary?): {path}", "kind": "binary_file"},
+        }
     except Exception as e:
         logger.error(f"Error reading {resolved}: {e}")
-        return ""
+        return {
+            "ok": False,
+            "data": None,
+            "error": {"message": f"Error reading file: {e}", "kind": "io_error"},
+        }
 
 
-def file_stats(path: str, workspace_root: Path) -> dict:
+def file_stats(path: str, workspace_root: Path) -> ToolResult:
     """
     Get basic file statistics without reading content.
     
@@ -86,15 +119,18 @@ def file_stats(path: str, workspace_root: Path) -> dict:
         workspace_root: Workspace root for sandboxing
     
     Returns:
-        Dictionary with size, line_count, exists, is_binary, error fields
+        ToolResult with data containing size, line_count, exists, is_binary, etc.
     """
     resolved = safe_resolve_path(path, workspace_root, must_exist=False)
     
     if not resolved or not resolved.exists():
         return {
-            "exists": False,
-            "path": path,
-            "error": "Path not found or outside workspace",
+            "ok": False,
+            "data": None,
+            "error": {
+                "message": "Path not found or outside workspace",
+                "kind": "not_found",
+            },
         }
     
     try:
@@ -118,21 +154,25 @@ def file_stats(path: str, workspace_root: Path) -> dict:
                 is_binary = True
         
         return {
-            "exists": True,
-            "path": str(resolved.relative_to(workspace_root)),
-            "size_bytes": stat.st_size,
-            "line_count": line_count,
-            "is_binary": is_binary,
-            "is_file": resolved.is_file(),
-            "is_dir": resolved.is_dir(),
+            "ok": True,
+            "data": {
+                "exists": True,
+                "path": str(resolved.relative_to(workspace_root)),
+                "size_bytes": stat.st_size,
+                "line_count": line_count,
+                "is_binary": is_binary,
+                "is_file": resolved.is_file(),
+                "is_dir": resolved.is_dir(),
+            },
+            "error": None,
         }
     
     except Exception as e:
         logger.error(f"Error getting stats for {path}: {e}")
         return {
-            "exists": True,
-            "path": path,
-            "error": str(e),
+            "ok": False,
+            "data": None,
+            "error": {"message": str(e), "kind": "io_error"},
         }
 
 
@@ -142,7 +182,7 @@ def list_files(
     ignore: list[str] | None = None,
     max_files: int = 500,
     include_hidden: bool = False,
-) -> list[dict]:
+) -> ToolResult:
     """
     List files in the workspace matching glob patterns.
 
@@ -154,7 +194,7 @@ def list_files(
         include_hidden: Whether to include hidden files/directories
 
     Returns:
-        List of dicts with path, size_bytes, is_dir keys
+        ToolResult with data containing list of file dicts with path, size_bytes
     """
     if globs is None:
         globs = ["**/*"]
@@ -202,7 +242,11 @@ def list_files(
             break
 
     logger.info(f"list_files matched {len(results)} files")
-    return results
+    return {
+        "ok": True,
+        "data": results,
+        "error": None,
+    }
 
 
 def rg_search(
@@ -212,7 +256,7 @@ def rg_search(
     ignore: list[str] | None = None,
     max_results: int = 50,
     context_lines: int = 2,
-) -> list[dict]:
+) -> ToolResult:
     """
     Search workspace using ripgrep with structured match results.
 
@@ -228,14 +272,19 @@ def rg_search(
         context_lines: Number of context lines before/after each match
 
     Returns:
-        List of match dicts with path, line_number, line_text, context fields
+        ToolResult with data containing query, globs, ignore, and matches list
     """
     rg_bin = shutil.which("rg")
     if not rg_bin:
         logger.error("ripgrep (rg) not found on PATH")
-        return [{"error": (
-            "ripgrep (rg) not found. Install via: pip install ripgrep-cli"
-        )}]
+        return {
+            "ok": False,
+            "data": None,
+            "error": {
+                "message": "ripgrep (rg) not found. Install via: pip install ripgrep-cli",
+                "kind": "missing_binary",
+            },
+        }
 
     cmd: list[str] = [
         rg_bin,
@@ -269,18 +318,43 @@ def rg_search(
         )
     except subprocess.TimeoutExpired:
         logger.error("rg_search timed out after 30s")
-        return [{"error": "Search timed out after 30 seconds"}]
+        return {
+            "ok": False,
+            "data": None,
+            "error": {"message": "Search timed out after 30 seconds", "kind": "timeout"},
+        }
     except Exception as e:
         logger.error(f"rg_search failed: {e}")
-        return [{"error": f"Search failed: {e}"}]
+        return {
+            "ok": False,
+            "data": None,
+            "error": {"message": f"Search failed: {e}", "kind": "subprocess_error"},
+        }
 
     # Exit code 1 = no matches (not an error)
     if proc.returncode not in (0, 1):
         logger.error(f"rg exited with code {proc.returncode}: {proc.stderr}")
-        return [{"error": f"ripgrep error: {proc.stderr.strip()}"}]
+        return {
+            "ok": False,
+            "data": None,
+            "error": {
+                "message": f"ripgrep error: {proc.stderr.strip()}",
+                "kind": "subprocess_error",
+            },
+        }
 
     if proc.returncode == 1:
-        return []
+        # No matches - still a success
+        return {
+            "ok": True,
+            "data": {
+                "query": query,
+                "globs": globs or [],
+                "ignore": ignore or [],
+                "matches": [],
+            },
+            "error": None,
+        }
 
     # Parse JSON lines output
     matches: list[dict] = []
@@ -336,4 +410,13 @@ def rg_search(
             pass
 
     logger.info(f"rg_search found {len(matches)} matches for {query!r}")
-    return matches
+    return {
+        "ok": True,
+        "data": {
+            "query": query,
+            "globs": globs or [],
+            "ignore": ignore or [],
+            "matches": matches,
+        },
+        "error": None,
+    }

@@ -156,11 +156,13 @@ def explain(path: str) -> None:
     print(f"[dim]Workspace root:[/dim] {workspace_root}\n")
 
     # Get file stats first
-    stats = file_stats(path, workspace_root)
-    if not stats.get("exists"):
-        print(f"[red]Error:[/red] File not found: {path}")
+    stats_result = file_stats(path, workspace_root)
+    if not stats_result["ok"]:
+        error_msg = stats_result["error"]["message"] if stats_result["error"] else "Unknown error"
+        print(f"[red]Error:[/red] {error_msg}")
         raise typer.Exit(code=1)
-
+    
+    stats = stats_result["data"]
     if stats.get("is_binary"):
         print(f"[red]Error:[/red] Cannot explain binary file: {path}")
         raise typer.Exit(code=1)
@@ -168,10 +170,13 @@ def explain(path: str) -> None:
     print(f"[dim]File:[/dim] {stats.get('path')} ({stats.get('line_count', '?')} lines, {stats.get('size_bytes', '?')} bytes)\n")
 
     # Read the full file content for the agent
-    content = open_snippet(path, workspace_root)
-    if not content:
-        print(f"[red]Error:[/red] Could not read file: {path}")
+    content_result = open_snippet(path, workspace_root)
+    if not content_result["ok"]:
+        error_msg = content_result["error"]["message"] if content_result["error"] else "Unknown error"
+        print(f"[red]Error:[/red] {error_msg}")
         raise typer.Exit(code=1)
+    
+    content = content_result["data"]["text"]
 
     try:
         agent = create_agent(workspace_root)
@@ -214,16 +219,18 @@ def find(query: str) -> None:
     print(f"[bold cyan]sca find[/bold cyan] {query!r}")
     print(f"[dim]Workspace root:[/dim] {workspace_root}\n")
 
-    matches = rg_search(query, workspace_root)
+    search_result = rg_search(query, workspace_root)
+    
+    if not search_result["ok"]:
+        error_msg = search_result["error"]["message"] if search_result["error"] else "Unknown error"
+        print(f"[red]Error:[/red] {error_msg}")
+        raise typer.Exit(code=1)
+    
+    matches = search_result["data"]["matches"]
 
     if not matches:
         print("[yellow]No matches found.[/yellow]")
         return
-
-    # Check for error results
-    if len(matches) == 1 and "error" in matches[0]:
-        print(f"[red]Error:[/red] {matches[0]['error']}")
-        raise typer.Exit(code=1)
 
     print(f"[bold]{len(matches)} match(es):[/bold]\n")
 

@@ -10,6 +10,7 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
 
 from sca.config import get_config
+from sca.tools import ToolResult
 from sca.tools.files import file_stats, list_files, open_snippet, rg_search
 from sca.tools.workspace_prompt import read_workspace_prompt
 
@@ -71,7 +72,7 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
         path: str,
         start_line: int = 1,
         end_line: int | None = None,
-    ) -> str:
+    ) -> ToolResult:
         """
         Read a line-ranged snippet from a file in the workspace.
         
@@ -83,12 +84,12 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
             end_line: Last line to read (1-indexed, inclusive). If None, reads to end of file
         
         Returns:
-            File content for specified line range
+            ToolResult with data containing path, start_line, end_line, text
         """
         return open_snippet(path, workspace_root, start_line, end_line)
     
     @agent.tool
-    def get_file_info(ctx: RunContext, path: str) -> dict:
+    def get_file_info(ctx: RunContext, path: str) -> ToolResult:
         """
         Get file metadata without reading content.
         
@@ -98,7 +99,7 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
             path: File path relative to workspace root
         
         Returns:
-            Dictionary with exists, size_bytes, line_count, is_binary fields
+            ToolResult with data containing exists, size_bytes, line_count, is_binary fields
         """
         return file_stats(path, workspace_root)
 
@@ -110,7 +111,7 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
         ignore: list[str] | None = None,
         max_results: int = 50,
         context_lines: int = 2,
-    ) -> list[dict]:
+    ) -> ToolResult:
         """
         Search the workspace using ripgrep.
 
@@ -124,7 +125,7 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
             context_lines: Lines of context around each match
 
         Returns:
-            List of match dicts with path, line_number, line_text fields
+            ToolResult with data containing query, globs, ignore, and matches list
         """
         return rg_search(query, workspace_root, globs, ignore, max_results, context_lines)
 
@@ -135,7 +136,7 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
         ignore: list[str] | None = None,
         max_files: int = 500,
         include_hidden: bool = False,
-    ) -> list[dict]:
+    ) -> ToolResult:
         """
         List files in the workspace matching glob patterns.
 
@@ -146,7 +147,7 @@ def create_agent(workspace_root: Path, skill_prompt: str | None = None) -> Agent
             include_hidden: Whether to include hidden files/directories
 
         Returns:
-            List of dicts with path and size_bytes fields
+            ToolResult with data containing list of file dicts with path and size_bytes fields
         """
         return list_files(workspace_root, globs, ignore, max_files, include_hidden)
 
