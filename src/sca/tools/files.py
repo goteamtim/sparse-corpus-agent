@@ -158,6 +158,7 @@ def file_stats(path: str, workspace_root: Path) -> ToolResult:
             "data": {
                 "exists": True,
                 "path": str(resolved.relative_to(workspace_root)),
+                "name": resolved.name,
                 "size_bytes": stat.st_size,
                 "line_count": line_count,
                 "is_binary": is_binary,

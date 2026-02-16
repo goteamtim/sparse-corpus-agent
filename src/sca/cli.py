@@ -167,10 +167,11 @@ def explain(
     repo: Optional[str] = typer.Option(None, "--repo", help="Path to target repo"),
 ) -> None:
     """
-    Explain a file using snippets and citations.
+    Explain a file using tool-driven exploration and citations.
 
-    Reads the file, gathers basic stats, and uses the agent to produce
-    an evidence-based explanation.
+    The agent uses its tools (code outline, file snippets, search) to
+    explore the file autonomously and produce an evidence-based explanation
+    with line-range citations.
     """
     setup_logging()
     workspace_root = find_workspace_root(repo_path=resolve_repo_arg(repo))
@@ -178,13 +179,13 @@ def explain(
     print(f"[bold cyan]sca explain[/bold cyan] {path}")
     print(f"[dim]Workspace root:[/dim] {workspace_root}\n")
 
-    # Get file stats first
+    # Quick pre-flight check: does the file exist and is it readable?
     stats_result = file_stats(path, workspace_root)
     if not stats_result["ok"]:
         error_msg = stats_result["error"]["message"] if stats_result["error"] else "Unknown error"
         print(f"[red]Error:[/red] {error_msg}")
         raise typer.Exit(code=1)
-    
+
     stats = stats_result["data"]
     if stats.get("is_binary"):
         print(f"[red]Error:[/red] Cannot explain binary file: {path}")
@@ -192,32 +193,32 @@ def explain(
 
     print(f"[dim]File:[/dim] {stats.get('path')} ({stats.get('line_count', '?')} lines, {stats.get('size_bytes', '?')} bytes)\n")
 
-    # Read the full file content for the agent
-    content_result = open_snippet(path, workspace_root)
-    if not content_result["ok"]:
-        error_msg = content_result["error"]["message"] if content_result["error"] else "Unknown error"
-        print(f"[red]Error:[/red] {error_msg}")
-        raise typer.Exit(code=1)
-    
-    content = content_result["data"]["text"]
-
     try:
         agent = create_agent(workspace_root)
     except Exception as e:
         print(f"[red]Error:[/red] Could not initialize agent: {e}")
         raise typer.Exit(code=1)
 
+    # Let the agent drive exploration via tools instead of pasting the
+    # whole file into the prompt.  It can use get_code_outline for
+    # structure, then read_file_snippet for the sections it needs.
     prompt = (
-        f"Explain the file `{path}` in detail. Here is the full content:\n\n"
-        f"```\n{content}\n```\n\n"
-        "Provide:\n"
-        "1. Purpose and responsibility of this file\n"
-        "2. Key functions/classes and what they do\n"
-        "3. Dependencies and how it fits into the larger project\n"
-        "4. Cite specific line numbers for important sections"
+        f"Explain the file `{path}` in detail.\n\n"
+        "Use your tools to explore this file:\n"
+        "1. Start with get_file_info to check size and type.\n"
+        "2. If a code outline is available (get_code_outline), use it to "
+        "understand the file's structure — top-level symbols, classes, functions.\n"
+        "3. Use read_file_snippet to read key sections you need to understand.\n"
+        "4. If needed, use search_files to find how this file connects to "
+        "the rest of the project.\n\n"
+        "Then provide:\n"
+        "- Purpose and responsibility of this file\n"
+        "- Key functions/classes and what they do\n"
+        "- Dependencies and how it fits into the larger project\n"
+        "- Cite specific file paths and line numbers for every claim"
     )
 
-    print("[dim]Agent is thinking...[/dim]")
+    print("[dim]Agent is exploring the file...[/dim]")
     try:
         result = agent.run_sync(prompt)
         print(f"\n{result.output}\n")
