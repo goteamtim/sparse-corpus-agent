@@ -187,7 +187,8 @@ class TestListFiles:
         self._populate(workspace)
         result = list_files(workspace)
         assert result["ok"] is True
-        paths = {f["path"] for f in result["data"]}
+        # Normalize paths to forward slashes for cross-platform compatibility
+        paths = {f["path"].replace("\\", "/") for f in result["data"]}
         assert "a.py" in paths
         assert "b.py" in paths
         assert "sub/c.txt" in paths
